@@ -21,7 +21,7 @@ import re
 import urllib.parse
 import asyncio
 
-log = logging.getLogger("VirusTotal")
+log = logging.getLogger("red.VirusTotal")
 
 class VirusTotal(commands.Cog):
     """Check links for malicious content using VirusTotal."""
@@ -252,7 +252,7 @@ class VirusTotal(commands.Cog):
 
         # If we found Addresses or IPs, check them async
         if all_addresses:
-            await asyncio.create_task(self.check_links_task(message, all_addresses))
+            await self.check_links_task(message, all_addresses)
 
     async def send_dm_to_user(self, member, link, dm_title: str, dm_description: str, notes: str):
         embed = discord.Embed(
