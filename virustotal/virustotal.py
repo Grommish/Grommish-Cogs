@@ -19,7 +19,6 @@ import logging
 import base64 # Used by API to encode URL for submission
 import re
 import urllib.parse
-import asyncio
 
 log = logging.getLogger("red.VirusTotal")
 
@@ -303,7 +302,7 @@ class VirusTotal(commands.Cog):
             if ((isinstance(num_suspicious, int) and num_suspicious >= 1)):
                 mal_sus += "and Suspicious "
         elif ((isinstance(num_suspicious, int) and num_suspicious >= 1)):
-            mal_sus = "Suspicious Link Found"
+            mal_sus = "Suspicious "
 
         mal_sus += "Link Found"
 
