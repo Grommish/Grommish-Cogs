@@ -1,0 +1,8 @@
+{
+    "author" : ["Donald Hoskins <gamingwithgeezers>"],
+    "install_msg" : "Thank you for installing the VirusTotal Cog.\nVirusTotal Cog sends links to VirusTotal for scanning and requires a VirusTotal API Key",
+    "name" : "VirusTotal",
+    "short" : "VirusTotal Link Scanning for RedBot-Discord 3.x",
+    "description" : "VirusTotal Link Scanning for RedBot-Discord 3.x that checks links sent to Discord against VirusTotal for malicious or suspicious reports\nThis Cog requires a VirusTotal API key, available for free at https://www.virustotal.com",
+    "tags" : ["Grommish VirusTotal"]
+}
