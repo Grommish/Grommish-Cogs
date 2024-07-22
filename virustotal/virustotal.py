@@ -255,16 +255,7 @@ class VirusTotal(commands.Cog):
         if all_addresses:
             await self.check_links_task(message, all_addresses)
 
-    async def send_dm_to_user(self, member, link, dm_title: str, dm_description: str, notes: str):
-        embed = discord.Embed(
-            description=dm_description,
-            title=dm_title,
-            color=discord.Color.red()
-        )
-        embed.set_author(name=f"{member.name}#{member.discriminator}")
-        embed.add_field(name="Link:", value="`" + str(link) + "`", inline=False)
-        embed.add_field(name="Notes:", value=notes, inline=False)
-        embed.add_field(name="Time:", value=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), inline=False)
+    async def send_dm_to_user(self, member, embed):
         try:
             await member.send(embed=embed)
         except discord.errors.Forbidden:
@@ -416,7 +407,7 @@ class VirusTotal(commands.Cog):
         # The Link is Malicious
         if isinstance(num_malicious, int) and num_malicious >= 1:
             if punishment == "ban":  # Ban the Sender
-                await self.send_dm_to_user(member, link, title, description, f"You have sent a link that is considered malicious and have been banned from the server.")
+                await self.send_dm_to_user(member, embed)
                 try:
                     await message.guild.ban(member, reason="Malicious link detected")
                     await self.send_to_reports_channel(guild, embed)
@@ -424,12 +415,14 @@ class VirusTotal(commands.Cog):
                     log.error("Bot does not have proper permissions to ban the user")
 
             elif punishment == "warn":  # DM Sender on Warn
-                await self.send_dm_to_user(member, link, title, description, f"WARNING: You have sent a link that is considered malicious!")
+                await self.send_dm_to_user(member, embed)
                 await self.send_to_reports_channel(guild, embed)
 
             else:  # This is when it's set to Punish
-                await self.send_dm_to_user(member, link, title, description, "You have sent a link that is considered malicious and have been disabled from sending further messages.\n"
-                                                                            f"You can appeal this status in `{punishment_channel.name}` channel.")
+                embed.add_field(name="Alert!, value=f""You have sent a link that is considered malicious and have been disabled from sending further messages.\n"
+                                                                            f"You can appeal this status in `{punishment_channel.name}` channel.",
+                                                                            inline=False)
+                await self.send_dm_to_user(member, embed)
                 try:  # Remove Existing Roles and Set the punishment_role
                     punishment_role_id = await self.config.guild(message.guild).punishment_role()
                     if punishment_role_id:
@@ -445,7 +438,7 @@ class VirusTotal(commands.Cog):
             try:
                 if any(role.id in excluded_roles for role in member.roles):
                     # Excluded Roles just get a heads up - BYPASS the Punishment Action
-                    await self.send_dm_to_user(member, link, title, description, embed)
+                    await self.send_dm_to_user(member, embed)
                 else:
                     await message.delete()
             except discord.errors.NotFound:
