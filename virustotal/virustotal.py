@@ -360,7 +360,9 @@ class VirusTotal(commands.Cog):
                     link = json_response["data"]["attributes"]["url"]
                 malicious = json_last_analysis_stats.get("malicious", 0)
                 suspicious = json_last_analysis_stats.get("suspicious", 0)
-                suspicious = suspicious - 1
+                if suspicious == 1:
+                    suspicious = suspicious - 1
+                
                 total_scanners = json_response["data"]["attributes"]["last_analysis_results"]
 
                 # Count the total number of vendors
