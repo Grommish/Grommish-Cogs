@@ -2,6 +2,11 @@ For RedBot-Discord Python 3.x
 
 This Cog submits IP and URLs to VirusTotal for scanning when they are sent to a Discord Server.  Malicious or Suspicious results are handled by the Cog.
 
+![image](https://github.com/user-attachments/assets/0779df77-68e4-4f92-abec-edcb0a7851dd)
+
+![image](https://github.com/user-attachments/assets/3c33af00-ba10-4a35-b777-2ad719162732)
+
+
 Where `[p]` is your Bot's Hotkey.
 
 To Install:
