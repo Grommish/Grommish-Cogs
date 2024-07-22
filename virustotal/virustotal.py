@@ -131,8 +131,7 @@ class VirusTotal(commands.Cog):
         if action_type not in ["warn", "ban", "punish"]:
             return await ctx.send("Invalid action. Please choose 'warn', 'ban', or 'punish'.")
 
-        if not channel:
-            return await ctx.send("Please specify a valid text channel for punishment.")
+
 
         # Punish action requires both a Role and a TextChannel to send them to.
         if action_type == "punish" and (not role or not channel):
@@ -165,7 +164,7 @@ class VirusTotal(commands.Cog):
     @checks.admin_or_permissions(manage_guild=True)
     async def set_threshold(self, ctx, threshold: int):
         """Set the threshold of number of malicious returns before taking action."""
-        if threshold < 0:
+        if threshold <= 0:
             await ctx.send("Please provide a non-negative number value for the threshold.")
             return
 
@@ -216,8 +215,7 @@ class VirusTotal(commands.Cog):
 
         return embed
 
-    @commands.Cog.listener()
-    async def on_message(self, message):
+    async def check_link(self, message):
         # Check the links asyncroniously
         author = message.author
         content = message.content
@@ -228,6 +226,10 @@ class VirusTotal(commands.Cog):
 
         # Set the guild the message arrived under
         guild = author.guild
+
+        enabled = await self.config.guild(guild).enabled()
+        if not enabled:
+            return
 
         debug = await self.config.guild(guild).debug()
         if debug == True:
@@ -270,25 +272,13 @@ class VirusTotal(commands.Cog):
         except discord.errors.HTTPException:
             log.warning("Sending a direct message to the user failed.")
 
-    async def send_to_reports_channel(self, guild, member, link, message, report_title, report_description):
+    async def send_to_reports_channel(self, guild, embed):
         reports_channel_id = await self.config.guild(guild).report_channel()
         reports_channel = guild.get_channel(reports_channel_id)
-        message_channel = message.channel
-
-        embed_channel = discord.Embed(
-            title=report_title,
-            description=report_description,
-            color=discord.Color.red()
-        )
-
-        embed_channel.add_field(name="User:", value=f"{member.name}#{member.discriminator}", inline=True)
-        embed_channel.add_field(name="Channel:", value=message_channel, inline=True)
-        embed_channel.add_field(name="Link:", value="`" + link + "`", inline=False)
-        embed_channel.add_field(name="Time:", value=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), inline=True)
 
         if reports_channel:
             try:
-                await reports_channel.send(embed=embed_channel)
+                await reports_channel.send(embed=embed)
             except discord.errors.Forbidden:
                 log.warning("You do not have permissions to send messages to the reports channel.")
             except discord.errors.HTTPException:
@@ -322,31 +312,30 @@ class VirusTotal(commands.Cog):
         author = message.author
         guild = author.guild
         debug = await self.config.guild(guild).debug()
+        threshold = await self.config.guild(guild).threshold()
         content = message.content
 
         # Load up the API key
         api_key = await self.config.guild(guild).api_key()
 
-        if debug == True:
+        if debug:
             log.info(f"[DEBUG] All Addresses: {all_addresses}")
         for address in all_addresses:
-            if debug == True:
-                log.info(f"[DEBUG] All Addresses: {all_addresses}")
+            if debug:
                 log.info(f"[DEBUG] Found address: {address}")
 
             headers = {
                 "x-apikey": api_key
             }
 
-            # Pull out the URL into it's parts and grab just the hostname
+            # Pull out the URL into its parts and grab just the hostname
             parsed_address = urllib.parse.urlparse(address)
             host_address = parsed_address.hostname
 
-            if debug == True:
+            if debug:
                 log.info(f"[DEBUG] HOST ADDRESS: {host_address}")
 
             # Check if the address is an IPv4 or IPv6 address
-            # FQDNs should be passed whole and have to be BASE64 encoded
             if re.match(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', host_address):
                 url = f"https://www.virustotal.com/api/v3/ip_addresses/{host_address}"
                 scan_type = "ip"
@@ -356,35 +345,47 @@ class VirusTotal(commands.Cog):
 
             response = requests.get(url, headers=headers)
 
-            if debug == True:
+            if debug:
                 log.info(f"[DEBUG] ENCODED ID: {base64.urlsafe_b64encode(address.encode()).decode().strip('=')}")
                 log.info(f"[DEBUG] RESPONSE: {response}")
 
             if response.status_code == 200:
                 json_response = response.json()
-                json_data = json_response.get("data", {})  # Extract the "data" object
-                json_attributes = json_data.get("attributes", {})  # Extract the "attributes" object
-                json_last_analysis_stats = json_attributes.get("last_analysis_stats", {})  # Extract the "last_analysis_stats" object
+                json_data = json_response.get("data", {})
+                json_attributes = json_data.get("attributes", {})
+                json_last_analysis_stats = json_attributes.get("last_analysis_stats", {})
                 if scan_type == "ip":
                     link = str(json_response["data"]["id"])
                 else:
                     link = json_response["data"]["attributes"]["url"]
-                malicious = json_last_analysis_stats.get("malicious", 0)  # Extract the "malicious" value
-                suspicious = json_last_analysis_stats.get("suspicious", 0)  # Extract the "suspicious" value
+                malicious = json_last_analysis_stats.get("malicious", 0)
+                suspicious = json_last_analysis_stats.get("suspicious", 0)
+                suspicious = suspicious - 1
                 total_scanners = json_response["data"]["attributes"]["last_analysis_results"]
 
                 # Count the total number of vendors
-                total_scanners = len(total_scanners)
+                total_scanners_count = len(total_scanners)
 
-                if (isinstance(malicious, int) and malicious >= 1) or (isinstance(suspicious, int) and suspicious >= 1):
-                    await self.handle_bad_link(guild, message, malicious, suspicious, total_scanners, link)
+                # Extract the names of the engines that returned malicious or suspicious results
+                malicious_engines = []
+                suspicious_engines = []
 
-                if await self.config.guild(guild).debug():
+                for engine, result in total_scanners.items():
+                    if result['category'] == 'malicious':
+                        malicious_engines.append(engine)
+                    elif result['category'] == 'suspicious':
+                        suspicious_engines.append(engine)
+
+                if (isinstance(malicious, int) and malicious >= 1) or (isinstance(suspicious, int) and suspicious > threshold):
+                    await self.handle_bad_link(guild, message, malicious, suspicious, total_scanners_count, link, malicious_engines, suspicious_engines)
+
+                if debug:
                     log.info(f"[DEBUG] MALICIOUS: {str(malicious)}")
                     log.info(f"[DEBUG] SUSPICIOUS: {str(suspicious)}")
+                    log.info(f"[DEBUG] MALICIOUS ENGINES: {malicious_engines}")
+                    log.info(f"[DEBUG] SUSPICIOUS ENGINES: {suspicious_engines}")
 
-
-    async def handle_bad_link(self, guild, message, num_malicious: int, num_suspicious: int, total_scanners: int, link):
+    async def handle_bad_link(self, guild, message, num_malicious: int, num_suspicious: int, total_scanners: int, link, malicious_engines: list, suspicious_engines: list):
         member = message.author
         debug = await self.config.guild(guild).debug()
 
@@ -399,30 +400,40 @@ class VirusTotal(commands.Cog):
         # Build out Embed Title and Description
         title, description = await self.determine_mal_sus(num_malicious, num_suspicious, total_scanners)
 
-        # The Link is Malicious
-        if ((isinstance(num_malicious, int) and num_malicious >= 1)):
-            if any(role.id in excluded_roles for role in member.roles):
-                # Excluded Roles just get a heads up - BYPASS the Punishment Action
-                await self.send_dm_to_user(member, link, title, description, f"You have sent a malicious link.")
+        # Build engine details
+        malicious_engines_str = ', '.join(malicious_engines) if malicious_engines else 'None'
+        suspicious_engines_str = ', '.join(suspicious_engines) if suspicious_engines else 'None'
 
-            elif punishment == "ban": # Ban the Sender
+        # Create the embed
+        embed = discord.Embed(title=title, description=description, color=discord.Color.red())
+        embed.add_field(name="Link", value=link, inline=False)
+        embed.add_field(name="Malicious Engines", value=malicious_engines_str, inline=False)
+        embed.add_field(name="Suspicious Engines", value=suspicious_engines_str, inline=False)
+        embed.set_footer(text=f"Total Scanners: {total_scanners}")
+
+        # The Link is Malicious
+        if isinstance(num_malicious, int) and num_malicious >= 1:
+            if punishment == "ban":  # Ban the Sender
                 await self.send_dm_to_user(member, link, title, description, f"You have sent a link that is considered malicious and have been banned from the server.")
                 try:
                     await message.guild.ban(member, reason="Malicious link detected")
+                    await self.send_to_reports_channel(guild, embed)
                 except discord.errors.Forbidden:
                     log.error("Bot does not have proper permissions to ban the user")
 
-            elif punishment == "warn": # DM Sender on Warn
+            elif punishment == "warn":  # DM Sender on Warn
                 await self.send_dm_to_user(member, link, title, description, f"WARNING: You have sent a link that is considered malicious!")
+                await self.send_to_reports_channel(guild, embed)
 
-            else: # This is when it's set to Punish
+            else:  # This is when it's set to Punish
                 await self.send_dm_to_user(member, link, title, description, "You have sent a link that is considered malicious and have been disabled from sending further messages.\n"
                                                                             f"You can appeal this status in `{punishment_channel.name}` channel.")
-                try: # Remove Existing Roles and Set the punishment_role
+                try:  # Remove Existing Roles and Set the punishment_role
                     punishment_role_id = await self.config.guild(message.guild).punishment_role()
                     if punishment_role_id:
                         punishment_role = message.guild.get_role(punishment_role_id)
                         await member.add_roles(punishment_role)
+                        await self.send_embed_to_reports_channel(guild, embed)
                 except discord.errors.Forbidden:
                     log.warning(f"Bot does not have permissions to add the {punishment_role.name} role to {member.name}.")
                 except discord.errors.HTTPException:
@@ -430,7 +441,11 @@ class VirusTotal(commands.Cog):
 
             # Handle the Link in the Message
             try:
-                await message.delete()
+                if any(role.id in excluded_roles for role in member.roles):
+                    # Excluded Roles just get a heads up - BYPASS the Punishment Action
+                    await self.send_dm_to_user(member, link, title, description, embed)
+                else:
+                    await message.delete()
             except discord.errors.NotFound:
                 log.warning("Message not found or already deleted.")
             except discord.errors.Forbidden:
@@ -442,7 +457,15 @@ class VirusTotal(commands.Cog):
             log.info(f"[DEBUG] Link: {link}")
 
         # Send to the Reports channel
-        await self.send_to_reports_channel(message.guild, member, link, message, title, description)
+        await self.send_to_reports_channel(guild, embed)
+
+    @commands.Cog.listener()
+    async def on_message(self, message):
+        await self.check_link(message)
+
+    @commands.Cog.listener()
+    async def on_message_edit(self, before, after):
+        await self.check_link(after)
 
 def setup(bot):
     bot.add_cog(VirusTotal(bot))
