@@ -19,6 +19,7 @@ import logging
 import base64 # Used by API to encode URL for submission
 import re
 import urllib.parse
+import uuid
 
 log = logging.getLogger("red.VirusTotal")
 
@@ -27,7 +28,7 @@ class VirusTotal(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-        self.config = Config.get_conf(self, identifier=1234567890, force_registration=True)
+        self.config = Config.get_conf(self, identifier=5719358415, force_registration=True)
         default_guild_settings = {
             "enabled": False,
             "api_key": None,
@@ -87,6 +88,9 @@ class VirusTotal(commands.Cog):
     @checks.admin_or_permissions(manage_guild=True)
     async def virustotal_setapi(self, ctx, apikey: str):
         """Set Your VirusTotal API"""
+        if not re.match(r'^[a-zA-Z0-9]{64}$', apikey):  # API keys are 64-character alphanumeric
+            await ctx.send("Invalid API key format.")
+            return
         await self.config.guild(ctx.guild).api_key.set(apikey)
         await ctx.send(f"VirusTotal API has been set.")
 
@@ -353,7 +357,7 @@ class VirusTotal(commands.Cog):
                 suspicious = json_last_analysis_stats.get("suspicious", 0)
                 if suspicious == 1:
                     suspicious = suspicious - 1
-                
+
                 total_scanners = json_response["data"]["attributes"]["last_analysis_results"]
 
                 # Count the total number of vendors
@@ -396,9 +400,11 @@ class VirusTotal(commands.Cog):
         # Build engine details
         malicious_engines_str = ', '.join(malicious_engines) if malicious_engines else 'None'
         suspicious_engines_str = ', '.join(suspicious_engines) if suspicious_engines else 'None'
+        member_info = f"{member.name} ({member.id})"
 
         # Create the embed
         embed = discord.Embed(title=title, description=description, color=discord.Color.red())
+        embed.add_field(name="User", value=member_info, inline=False)
         embed.add_field(name="Link", value=link, inline=False)
         embed.add_field(name="Malicious Engines", value=malicious_engines_str, inline=False)
         embed.add_field(name="Suspicious Engines", value=suspicious_engines_str, inline=False)
