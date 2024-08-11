@@ -344,34 +344,46 @@ class VirusTotal(commands.Cog):
                 log.info(f"[DEBUG] ENCODED ID: {base64.urlsafe_b64encode(address.encode()).decode().strip('=')}")
                 log.info(f"[DEBUG] RESPONSE: {response}")
 
+
             if response.status_code == 200:
                 json_response = response.json()
                 json_data = json_response.get("data", {})
                 json_attributes = json_data.get("attributes", {})
                 json_last_analysis_stats = json_attributes.get("last_analysis_stats", {})
+
                 if scan_type == "ip":
                     link = str(json_response["data"]["id"])
                 else:
                     link = json_response["data"]["attributes"]["url"]
+
                 malicious = json_last_analysis_stats.get("malicious", 0)
                 suspicious = json_last_analysis_stats.get("suspicious", 0)
+
                 if suspicious == 1:
                     suspicious = suspicious - 1
 
                 total_scanners = json_response["data"]["attributes"]["last_analysis_results"]
 
-                # Count the total number of vendors
-                total_scanners_count = len(total_scanners)
+                # Count the total number of vendors, ignoring Quttera
+                total_scanners_count = len([engine for engine in total_scanners if engine != "Quttera"])
 
-                # Extract the names of the engines that returned malicious or suspicious results
+                # Extract the names of the engines that returned malicious or suspicious results, ignoring Quttera
                 malicious_engines = []
                 suspicious_engines = []
 
                 for engine, result in total_scanners.items():
                     if result['category'] == 'malicious':
-                        malicious_engines.append(engine)
+                        if engine == "Quttera":
+                            malicious_engines.pop()
+                            continue
+                        else:
+                            malicious_engines.append(engine)
                     elif result['category'] == 'suspicious':
-                        suspicious_engines.append(engine)
+                        if engine == "Quttera":
+                            malicious_engines.pop()
+                            continue
+                        else:
+                            suspicious_engines.append(engine)
 
                 if (isinstance(malicious, int) and malicious >= 1) or (isinstance(suspicious, int) and suspicious > threshold):
                     await self.handle_bad_link(guild, message, malicious, suspicious, total_scanners_count, link, malicious_engines, suspicious_engines)
@@ -389,7 +401,8 @@ class VirusTotal(commands.Cog):
         # Excluded Role IDs
         excluded_roles = await self.config.guild(message.guild).excluded_roles()
         punishment = await self.config.guild(message.guild).punishment_action()
-        punishment_channel = await self.config.guild(message.guild).punishment_channel()
+        punishment_channel_id = await self.config.guild(message.guild).punishment_channel()
+        punishment_channel = guild.get_channel(int(f"{punishment_channel_id}"))
 
         if debug:
             log.info(f"[DEBUG] PUNISH: {punishment}")
@@ -424,8 +437,8 @@ class VirusTotal(commands.Cog):
                 await self.send_dm_to_user(member, embed)
                 await self.send_to_reports_channel(guild, embed)
 
-            else:  # This is when it's set to Punish
-                embed.add_field(name="Alert!, value=f""You have sent a link that is considered malicious and have been disabled from sending further messages.\n"
+            elif punishment == "punish":  # This is when it's set to Punish
+                embed.add_field(name="Alert!", value=f"You have sent a link that is considered malicious and have been disabled from sending further messages.\n"
                                                                             f"You can appeal this status in `{punishment_channel.name}` channel.",
                                                                             inline=False)
                 await self.send_dm_to_user(member, embed)
