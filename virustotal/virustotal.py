@@ -282,22 +282,22 @@ class VirusTotal(commands.Cog):
     async def determine_mal_sus(self, num_malicious, num_suspicious, total_scanners):
 
         # Format the Title
-        if ((isinstance(num_malicious, int) and num_malicious >= 1)): # Malicious Link
+        if num_malicious >= 1: # Malicious Link
             mal_sus = "Malicious "
-            if ((isinstance(num_suspicious, int) and num_suspicious >= 1)):
+            if num_suspicious >= 1:
                 mal_sus += "and Suspicious "
-        elif ((isinstance(num_suspicious, int) and num_suspicious >= 1)):
+        elif num_suspicious >= 1:
             mal_sus = "Suspicious "
 
         mal_sus += "Link Found"
 
         # Format the Description
-        if ((isinstance(num_malicious, int) and num_malicious >= 1)): # Malicious Link
-            message_content = f"Found Malicious by: {str(num_malicious)} of {str(total_scanners)} virus scanners"
-            if ((isinstance(num_suspicious, int) and num_suspicious >= 1)):
-                message_content += f"\nFound Suspicious by: {str(num_suspicious)} of {str(total_scanners)} virus scanners"
-        elif ((isinstance(num_suspicious, int) and num_suspicious >= 1)):
-            message_content = f"Found Suspicious by: {str(num_suspicious)} of {str(total_scanners)} virus scanners"
+        if num_malicious >= 1: # Malicious Link
+            message_content = f"Found Malicious by: {num_malicious} of {total_scanners} virus scanners"
+            if num_suspicious >= 1:
+                message_content += f"\nFound Suspicious by: {num_suspicious} of {total_scanners} virus scanners"
+        elif num_suspicious >= 1:
+            message_content = f"Found Suspicious by: {num_suspicious} of {total_scanners} virus scanners"
 
         # Send back the results
         return mal_sus, message_content # Title and Description
@@ -356,11 +356,8 @@ class VirusTotal(commands.Cog):
                 else:
                     link = json_response["data"]["attributes"]["url"]
 
-                malicious = json_last_analysis_stats.get("malicious", 0)
-                suspicious = json_last_analysis_stats.get("suspicious", 0)
-
-                if suspicious == 1:
-                    suspicious = suspicious - 1
+                #malicious = json_last_analysis_stats.get("malicious", 0)
+                #suspicious = json_last_analysis_stats.get("suspicious", 0)
 
                 total_scanners = json_response["data"]["attributes"]["last_analysis_results"]
 
@@ -372,25 +369,21 @@ class VirusTotal(commands.Cog):
                 suspicious_engines = []
 
                 for engine, result in total_scanners.items():
+                    if engine == "Quttera":
+                        continue
                     if result['category'] == 'malicious':
-                        if engine == "Quttera":
-                            malicious_engines.pop()
-                            continue
-                        else:
-                            malicious_engines.append(engine)
+                        malicious_engines.append(engine)
                     elif result['category'] == 'suspicious':
-                        if engine == "Quttera":
-                            malicious_engines.pop()
-                            continue
-                        else:
-                            suspicious_engines.append(engine)
+                        suspicious_engines.append(engine)
 
-                if (isinstance(malicious, int) and malicious >= 1) or (isinstance(suspicious, int) and suspicious > threshold):
+                malicious = len(malicious_engines)
+                suspicious = len(suspicious_engines)
+                if malicious >= 1 or suspicious > threshold:
                     await self.handle_bad_link(guild, message, malicious, suspicious, total_scanners_count, link, malicious_engines, suspicious_engines)
 
                 if debug:
-                    log.info(f"[DEBUG] MALICIOUS: {str(malicious)}")
-                    log.info(f"[DEBUG] SUSPICIOUS: {str(suspicious)}")
+                    log.info(f"[DEBUG] MALICIOUS: {malicious}")
+                    log.info(f"[DEBUG] SUSPICIOUS: {suspicious}")
                     log.info(f"[DEBUG] MALICIOUS ENGINES: {malicious_engines}")
                     log.info(f"[DEBUG] SUSPICIOUS ENGINES: {suspicious_engines}")
 
@@ -424,7 +417,7 @@ class VirusTotal(commands.Cog):
         embed.set_footer(text=f"Total Scanners: {total_scanners}")
 
         # The Link is Malicious
-        if isinstance(num_malicious, int) and num_malicious >= 1:
+        if num_malicious >= 1:
             if punishment == "ban":  # Ban the Sender
                 await self.send_dm_to_user(member, embed)
                 try:
