@@ -39,6 +39,7 @@ class VirusTotal(commands.Cog):
             "punishment_channel": None,
             "threshold": 5,
             "debug": False,
+            "dmuser": True,
         }
         self.config.register_guild(**default_guild_settings)
         log.info("VirusTotal link scanning has started.")
@@ -102,6 +103,14 @@ class VirusTotal(commands.Cog):
         await self.config.guild(ctx.guild).debug.set(not debug)
         await ctx.send(f"VirusTotal debug logging is now {'enabled' if not debug else 'disabled'}.")
 
+    @virustotal_setgroup.command(name="dmuser")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def virustotal_dmuser(self, ctx):
+        '''Enable/Disable Sending DM Notifications to the User'''
+        dmuser = await self.config.guild(ctx.guild).dmuser()
+        await self.config.guild(ctx.guild).dmuser.set(not dmuser)
+        await ctx.send(f"VirusTotal {'will' if not dmuser else 'will not'} send a DM to the user when triggered.")
+
     @virustotal_setgroup.command(name="exclude")
     @checks.admin_or_permissions(manage_guild=True)
     async def exclude_roles(self, ctx, *roles: discord.Role):
@@ -134,8 +143,6 @@ class VirusTotal(commands.Cog):
 
         if action_type not in ["warn", "ban", "punish"]:
             return await ctx.send("Invalid action. Please choose 'warn', 'ban', or 'punish'.")
-
-
 
         # Punish action requires both a Role and a TextChannel to send them to.
         if action_type == "punish" and (not role or not channel):
@@ -195,6 +202,7 @@ class VirusTotal(commands.Cog):
         report_channel_name = report_channel.name if report_channel else "Not set"
         threshold = await self.config.guild(guild).threshold()
         debug = await self.config.guild(guild).debug()
+        dmuser = await self.config.guild(guild).dmuser()
 
         embed = discord.Embed(title="VirusTotal Status", color=discord.Color.blue())
         embed.add_field(name="Link checking", value="✅ Enabled" if enabled else "❌ Disabled", inline=False)
@@ -210,6 +218,7 @@ class VirusTotal(commands.Cog):
         embed.add_field(name="Reports channel", value=report_channel_name, inline=False)
         embed.add_field(name="Threshold", value=str(threshold) + ' virus scanning vendors', inline=False)
         embed.add_field(name="Debug Logging", value="✅ Enabled" if debug else "❌ Disabled", inline=False)
+        embed.add_field(name="DM User", value="✅ Enabled" if dmuser else "❌ Disabled", inline=False)
 
         if excluded_roles:
             excluded_roles_names = ", ".join([guild.get_role(role_id).name for role_id in excluded_roles])
@@ -260,12 +269,18 @@ class VirusTotal(commands.Cog):
             await self.check_links_task(message, all_addresses)
 
     async def send_dm_to_user(self, member, embed):
-        try:
-            await member.send(embed=embed)
-        except discord.errors.Forbidden:
-            log.warning("You do not have permissions to send a direct message to the user.")
-        except discord.errors.HTTPException:
-            log.warning("Sending a direct message to the user failed.")
+        dmuser = await self.config.guild(member.guild).dmuser()
+
+        # Is sending to DMs to user enabled?
+        if not dmuser:
+            return
+        else:
+            try:
+                await member.send(embed=embed)
+            except discord.errors.Forbidden:
+                log.warning("You do not have permissions to send a direct message to the user.")
+            except discord.errors.HTTPException:
+                log.warning("Sending a direct message to the user failed.")
 
     async def send_to_reports_channel(self, guild, embed):
         reports_channel_id = await self.config.guild(guild).report_channel()
@@ -422,13 +437,11 @@ class VirusTotal(commands.Cog):
                 await self.send_dm_to_user(member, embed)
                 try:
                     await message.guild.ban(member, reason="Malicious link detected")
-                    await self.send_to_reports_channel(guild, embed)
                 except discord.errors.Forbidden:
                     log.error("Bot does not have proper permissions to ban the user")
 
             elif punishment == "warn":  # DM Sender on Warn
                 await self.send_dm_to_user(member, embed)
-                await self.send_to_reports_channel(guild, embed)
 
             elif punishment == "punish":  # This is when it's set to Punish
                 embed.add_field(name="Alert!", value=f"You have sent a link that is considered malicious and have been disabled from sending further messages.\n"
@@ -440,11 +453,13 @@ class VirusTotal(commands.Cog):
                     if punishment_role_id:
                         punishment_role = message.guild.get_role(punishment_role_id)
                         await member.add_roles(punishment_role)
-                        await self.send_embed_to_reports_channel(guild, embed)
+                        # await self.send_embed_to_reports_channel(guild, embed)
                 except discord.errors.Forbidden:
                     log.warning(f"Bot does not have permissions to add the {punishment_role.name} role to {member.name}.")
                 except discord.errors.HTTPException:
                     log.warning(f"Adding the {punishment_role.name} role to {member.name} failed.")
+
+            await self.send_to_reports_channel(guild, embed)
 
             # Handle the Link in the Message
             try:
