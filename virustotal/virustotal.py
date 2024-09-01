@@ -10,7 +10,7 @@
 # http://malware.wicar.org/data/java_jre17_exec.html <- This returns Malicious
 # 146.59.228.105 <- This returns Malicious AND Suspicious
 
-from redbot.core import commands, Config, checks
+from redbot.core import commands, Config, checks, modlog
 import aiohttp
 import discord
 import requests
@@ -40,6 +40,7 @@ class VirusTotal(commands.Cog):
             "threshold": 5,
             "debug": False,
             "dmuser": True,
+            "modlog_channel": None,
         }
         self.config.register_guild(**default_guild_settings)
         log.info("VirusTotal link scanning has started.")
@@ -135,6 +136,13 @@ class VirusTotal(commands.Cog):
             excluded_roles_str = "None"
         await ctx.send(f"The following roles have been excluded from VirusTotal link checking:\n{excluded_roles_str}")
 
+    @virustotal_setgroup.command(name="modlog")
+    @checks.admin_or_permissions(manage_guild=True)
+    async def set_modlog_channel(self, ctx, channel: discord.TextChannel):
+        """Set the modlog channel where moderation actions like bans will be logged."""
+        await self.config.guild(ctx.guild).modlog_channel.set(channel.id)
+        await ctx.send(f"Modlog channel set to: {channel.mention}")
+
     @virustotal_setgroup.command(name="punishment")
     @checks.admin_or_permissions(manage_guild=True)
     async def set_punishment(self, ctx, action: str, role: discord.Role = None, channel: discord.TextChannel = None):
@@ -200,6 +208,9 @@ class VirusTotal(commands.Cog):
         report_channel_id = await self.config.guild(guild).report_channel()
         report_channel = guild.get_channel(report_channel_id) if report_channel_id else None
         report_channel_name = report_channel.name if report_channel else "Not set"
+        modlog_channel_id = await self.config.guild(guild).modlog_channel()  # New modlog channel configuration
+        modlog_channel = guild.get_channel(modlog_channel_id) if modlog_channel_id else None  # Get modlog channel
+        modlog_channel_name = modlog_channel.name if modlog_channel else "Not set"  # Determine modlog channel name
         threshold = await self.config.guild(guild).threshold()
         debug = await self.config.guild(guild).debug()
         dmuser = await self.config.guild(guild).dmuser()
@@ -216,6 +227,7 @@ class VirusTotal(commands.Cog):
                             value=f"{'Warn' if punishment == 'warn' else 'Ban'}",
                             inline=False)
         embed.add_field(name="Reports channel", value=report_channel_name, inline=False)
+        embed.add_field(name="Modlog channel", value=modlog_channel_name, inline=False)
         embed.add_field(name="Threshold", value=str(threshold) + ' virus scanning vendors', inline=False)
         embed.add_field(name="Debug Logging", value="✅ Enabled" if debug else "❌ Disabled", inline=False)
         embed.add_field(name="DM User", value="✅ Enabled" if dmuser else "❌ Disabled", inline=False)
@@ -410,7 +422,7 @@ class VirusTotal(commands.Cog):
         excluded_roles = await self.config.guild(message.guild).excluded_roles()
         punishment = await self.config.guild(message.guild).punishment_action()
         punishment_channel_id = await self.config.guild(message.guild).punishment_channel()
-        punishment_channel = guild.get_channel(int(f"{punishment_channel_id}"))
+        punishment_channel = guild.get_channel(int(punishment_channel_id)) if punishment_channel_id else None
 
         if debug:
             log.info(f"[DEBUG] PUNISH: {punishment}")
@@ -434,37 +446,43 @@ class VirusTotal(commands.Cog):
         # The Link is Malicious
         if num_malicious >= 1:
             if punishment == "ban":  # Ban the Sender
-                await self.send_dm_to_user(member, embed)
+                # await self.send_dm_to_user(member, embed)
                 try:
                     await message.guild.ban(member, reason="Malicious link detected")
+                    # Log the ban to the modlog channel
+                    await self.log_to_modlog_channel(guild, member, "Malicious link detected and user was banned.")
                 except discord.errors.Forbidden:
                     log.error("Bot does not have proper permissions to ban the user")
 
-            elif punishment == "warn":  # DM Sender on Warn
-                await self.send_dm_to_user(member, embed)
-
             elif punishment == "punish":  # This is when it's set to Punish
-                embed.add_field(name="Alert!", value=f"You have sent a link that is considered malicious and have been disabled from sending further messages.\n"
-                                                                            f"You can appeal this status in `{punishment_channel.name}` channel.",
-                                                                            inline=False)
-                await self.send_dm_to_user(member, embed)
-                try:  # Remove Existing Roles and Set the punishment_role
+                embed.add_field(
+                    name="Alert!",
+                    value=f"You have sent a link that is considered malicious and have been disabled from sending further messages.\n"
+                        f"You can appeal this status in `{punishment_channel.name}` channel.",
+                    inline=False
+                )
+                
+                try:
+                    # Remove all roles from the user except @everyone
+                    roles_to_remove = [role for role in member.roles if role != guild.default_role]
+                    await member.remove_roles(*roles_to_remove)
+                    
+                    # Assign the punishment role
                     punishment_role_id = await self.config.guild(message.guild).punishment_role()
                     if punishment_role_id:
                         punishment_role = message.guild.get_role(punishment_role_id)
                         await member.add_roles(punishment_role)
-                        # await self.send_embed_to_reports_channel(guild, embed)
+                        # Optionally, log this action to the modlog channel
+                        await self.log_to_modlog_channel(guild, member, f"User stripped of all roles and assigned punishment role: {punishment_role.name}")
+                        
                 except discord.errors.Forbidden:
-                    log.warning(f"Bot does not have permissions to add the {punishment_role.name} role to {member.name}.")
+                    log.warning(f"Bot does not have permissions to manage roles for {member.name}.")
                 except discord.errors.HTTPException:
-                    log.warning(f"Adding the {punishment_role.name} role to {member.name} failed.")
+                    log.warning(f"Managing roles for {member.name} failed.")
 
             # Handle the Link in the Message
             try:
-                if any(role.id in excluded_roles for role in member.roles):
-                    # Excluded Roles just get a heads up - BYPASS the Punishment Action
-                    await self.send_dm_to_user(member, embed)
-                else:
+                if not any(role.id in excluded_roles for role in member.roles):
                     await message.delete()
             except discord.errors.NotFound:
                 log.warning("Message not found or already deleted.")
@@ -477,7 +495,30 @@ class VirusTotal(commands.Cog):
             log.info(f"[DEBUG] Link: {link}")
 
         # Send to the Reports channel
+        await self.send_dm_to_user(member, embed)
         await self.send_to_reports_channel(guild, embed)
+
+    async def log_to_modlog_channel(self, guild, member, reason):
+        """Log moderation actions like bans to the configured modlog channel."""
+        modlog_channel_id = await self.config.guild(guild).modlog_channel()
+        modlog_channel = guild.get_channel(modlog_channel_id)
+
+        if modlog_channel:
+            embed = discord.Embed(
+                title="User Banned",
+                description=f"**User:** {member} ({member.id})\n**Reason:** {reason}",
+                color=discord.Color.red(),
+                timestamp=datetime.datetime.utcnow(),
+            )
+            embed.set_footer(text=f"Guild: {guild.name}")
+            try:
+                await modlog_channel.send(embed=embed)
+            except discord.errors.Forbidden:
+                log.warning("You do not have permissions to send messages to the modlog channel.")
+            except discord.errors.HTTPException:
+                log.warning("Sending a message to the modlog channel failed.")
+        else:
+            log.warning("Modlog channel is not set.")
 
     @commands.Cog.listener()
     async def on_message(self, message):
