@@ -459,8 +459,6 @@ class VirusTotal(commands.Cog):
                 except discord.errors.HTTPException:
                     log.warning(f"Adding the {punishment_role.name} role to {member.name} failed.")
 
-            await self.send_to_reports_channel(guild, embed)
-
             # Handle the Link in the Message
             try:
                 if any(role.id in excluded_roles for role in member.roles):
