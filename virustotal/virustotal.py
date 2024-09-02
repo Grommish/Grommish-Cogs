@@ -446,11 +446,34 @@ class VirusTotal(commands.Cog):
         # The Link is Malicious
         if num_malicious >= 1:
             if punishment == "ban":  # Ban the Sender
-                # await self.send_dm_to_user(member, embed)
+                try:
+                    # Log the ban to the modlog using the Modlog cog API
+                    await modlog.create_case(
+                        self.bot,
+                        guild,
+                        message.created_at,
+                        user=member,
+                        moderator=guild.me,
+                        reason="Malicious link detected",
+                        action_type="ban"
+                    )
+
+                    log.info(f"Modlog case created for banning user {member} due to malicious link.")
+                except RuntimeError:  # modlog channel isn't set
+                    pass
+                except discord.Forbidden:
+                    log.info(
+                        "Modlog failed to edit the Discord message for"
+                        " the case #%s from guild with ID due to missing permissions."
+                    )
+                except Exception:
+                    log.exception(
+                        "Modlog failed to send the Discord message for"
+                        " the case #%s from guild with ID %s due to unexpected error."
+                    )
+
                 try:
                     await message.guild.ban(member, reason="Malicious link detected")
-                    # Log the ban to the modlog channel
-                    await self.log_to_modlog_channel(guild, member, "Malicious link detected and user was banned.")
                 except discord.errors.Forbidden:
                     log.error("Bot does not have proper permissions to ban the user")
 
@@ -461,7 +484,35 @@ class VirusTotal(commands.Cog):
                         f"You can appeal this status in `{punishment_channel.name}` channel.",
                     inline=False
                 )
-                
+
+                # Modlog - Open the case
+                try:
+                    log.debug("Entering Punishment Modlog")
+                    await modlog.create_case(
+                        self.bot,
+                        guild,
+                        message.created_at,
+                        user=member,
+                        moderator=guild.me,
+                        reason="Malicious link detected",
+                        action_type="softban"
+                    )
+                    
+                    log.info(f"Modlog case created for punishing user {member} due to malicious link.")
+                except TypeError as e:
+                    log.error(f"TypeError while creating a modlog case: {e}")
+                except discord.Forbidden as e:
+                    log.error(f"Insufficient permissions to create a modlog case: {e}")
+                except discord.HTTPException as e:
+                    log.error(f"HTTPException occurred while creating a modlog case: {e}")
+                except ValueError as e:
+                    log.error(f"ValueError while creating a modlog case: {e}")
+                except RuntimeError as e:
+                    log.error(f"RuntimeError in modlog case creation: {e}")
+                except Exception as e:  # Catch-all for any other exceptions
+                    log.error(f"An unexpected error occurred while creating a modlog case: {e}")
+
+                # Do the Punishing
                 try:
                     # Remove all roles from the user except @everyone
                     roles_to_remove = [role for role in member.roles if role != guild.default_role]
@@ -470,11 +521,9 @@ class VirusTotal(commands.Cog):
                     # Assign the punishment role
                     punishment_role_id = await self.config.guild(message.guild).punishment_role()
                     if punishment_role_id:
-                        punishment_role = message.guild.get_role(punishment_role_id)
+                        punishment_role = message.guild.get_role(punishment_role_id)                        
                         await member.add_roles(punishment_role)
-                        # Optionally, log this action to the modlog channel
-                        await self.log_to_modlog_channel(guild, member, f"User stripped of all roles and assigned punishment role: {punishment_role.name}")
-                        
+
                 except discord.errors.Forbidden:
                     log.warning(f"Bot does not have permissions to manage roles for {member.name}.")
                 except discord.errors.HTTPException:
