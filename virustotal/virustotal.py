@@ -28,7 +28,7 @@ class VirusTotal(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-        self.config = Config.get_conf(self, identifier=5719358415, force_registration=True)
+        self.config = Config.get_conf(self, identifier=736848614378176543, force_registration=True)
         default_guild_settings = {
             "enabled": False,
             "api_key": None,
