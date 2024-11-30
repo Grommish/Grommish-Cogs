@@ -11,7 +11,7 @@ Where `[p]` is your Bot's Hotkey.
 To Install:
 
 Add the Repo to your RedBot-Discord instance:
-- configuration`[p]repo add Grommish-Cogs https://github.com/Grommish/Grommish-Cogs.git main`
+- `[p]repo add Grommish-Cogs https://github.com/Grommish/Grommish-Cogs.git main`
 - `[p]cog install Grommish-Cogs virustotal`
 - `[p]load virustotal`
 - `[p]virustotal status`
