@@ -1,8 +1,9 @@
 {
-    "author" : ["Donald Hoskins <gamingwithgeezers>"],
-    "install_msg" : "Home of the VirusTotal Cog.",
+    "author" : ["Donald Hoskins <Grommish>"],
+    "install_msg" : "You must register your Virustotal API key with Redbot by using `[p]set api virustotal`\n\nYou will click the button and enter `api_key <yourapikey>`\n\nCheck that the API key is properly set with `[p]vt status`",
     "name" : "Grommish-Cogs",
     "short" : "RedBot-Discord 3.x Cogs by Grommish",
     "description" : "RedBot-Discord 3.x (3.5.5) Cogs by Grommish",
-    "tags" : ["Grommish VirusTotal"]
+    "tags": ["Grommish", "VirusTotal", "Security", "Malware Scan", "Link Scan"],
+    "type" : "COG"
 }

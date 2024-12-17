@@ -31,7 +31,6 @@ class VirusTotal(commands.Cog):
         self.config = Config.get_conf(self, identifier=736848614378176543, force_registration=True)
         default_guild_settings = {
             "enabled": False,
-            "api_key": None,
             "excluded_roles": [],
             "report_channel": None,
             "punishment_action": "Warn",
@@ -44,6 +43,13 @@ class VirusTotal(commands.Cog):
         }
         self.config.register_guild(**default_guild_settings)
         log.info("VirusTotal link scanning has started.")
+
+    # Use Standarized Calls to handle Secret Token/API
+    async def get_api_key(self):
+        # First, try to get the API key from shared API tokens
+        shared_api_key = await self.bot.get_shared_api_tokens("virustotal")
+        # Return api_key as the API token or None if it isn't set
+        return shared_api_key.get("api_key", None)
 
     @commands.group(aliases=["vt"])
     @commands.guild_only()
@@ -60,7 +66,7 @@ class VirusTotal(commands.Cog):
         api = await self.config.guild(ctx.guild).api_key()
 
         if not api:
-            await ctx.send("VirusTotal API Missing.  Use `[p]virustotal set api <api_key>` to set")
+            await ctx.send("VirusTotal API Missing.  Use `[p]set api virustotal api_key <api_key>` to set")
             return
 
         await self.config.guild(ctx.guild).enabled.set(not enabled)
@@ -71,7 +77,7 @@ class VirusTotal(commands.Cog):
     async def reset_settings(self, ctx):
         """Reset VirusTotal settings to default."""
         await self.config.guild(ctx.guild).clear()
-        await ctx.send("VirusTotal settings have been reset to default.")
+        await ctx.send("VirusTotal settings have been reset to default.")        
 
     @virustotal.command(name="status")
     @checks.admin_or_permissions(manage_guild=True)
@@ -85,16 +91,6 @@ class VirusTotal(commands.Cog):
     @checks.admin_or_permissions(manage_guild=True)
     async def virustotal_setgroup(self, ctx):
         """Set various configurations for VirusTotal."""
-
-    @virustotal_setgroup.command(name="api")
-    @checks.admin_or_permissions(manage_guild=True)
-    async def virustotal_setapi(self, ctx, apikey: str):
-        """Set Your VirusTotal API"""
-        if not re.match(r'^[a-zA-Z0-9]{64}$', apikey):  # API keys are 64-character alphanumeric
-            await ctx.send("Invalid API key format.")
-            return
-        await self.config.guild(ctx.guild).api_key.set(apikey)
-        await ctx.send(f"VirusTotal API has been set.")
 
     @virustotal_setgroup.command(name="debug")
     @checks.admin_or_permissions(manage_guild=True)
@@ -197,9 +193,14 @@ class VirusTotal(commands.Cog):
 
     async def get_status(self, guild):
         """Get the current status of the VirusTotal cog."""
+        debug = await self.config.guild(guild).debug()  # Debug Flag
+        api_key = await self.bot.get_shared_api_tokens("virustotal")  # Use the built in API Token handler
+        if debug:
+            # !!SECURITY WARNING!!  This WILL display your API Token in plaintext in the logs
+            log.info(f"[DEBUG] get_shared_api_tokens: {api_key}") 
+
         enabled = await self.config.guild(guild).enabled()
         excluded_roles = await self.config.guild(guild).excluded_roles()
-        api_key = await self.config.guild(guild).api_key()
         punishment = await self.config.guild(guild).punishment_action()
         punishment_role_id = await self.config.guild(guild).punishment_role()
         punishment_role = guild.get_role(punishment_role_id) if punishment_role_id else None
@@ -212,12 +213,11 @@ class VirusTotal(commands.Cog):
         modlog_channel = guild.get_channel(modlog_channel_id) if modlog_channel_id else None  # Get modlog channel
         modlog_channel_name = modlog_channel.name if modlog_channel else "Not set"  # Determine modlog channel name
         threshold = await self.config.guild(guild).threshold()
-        debug = await self.config.guild(guild).debug()
         dmuser = await self.config.guild(guild).dmuser()
 
         embed = discord.Embed(title="VirusTotal Status", color=discord.Color.blue())
         embed.add_field(name="Link checking", value="✅ Enabled" if enabled else "❌ Disabled", inline=False)
-        embed.add_field(name="VirusTotal API key", value="✅ Set" if api_key else "❌ Not set", inline=False)
+        embed.add_field(name="VirusTotal API key", value="✅ Set" if api_key.get("api_key") is not None else "❌ Not set", inline=False)
         if punishment_role:
             embed.add_field(name="Action upon detection",
                             value = f"Punish them to `{punishment_role.name}` in `{punishment_channel.name}`\n",
