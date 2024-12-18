@@ -3,6 +3,8 @@
 # Copyright 2024 - Donald Hoskins <grommish@gmail.com>
 # Released under GNU General Public License v3.0
 # TODO: Check out AbuseIPDB
+#       See about allowing people to abuse their API token for checks/min
+#         if they choose to.
 #
 # A check of the system can be run by using either of the two following URLs/IPs:
 # I cannot vouch for the SAFETY of the below links!  DO NOT ACTIVELY GOTO THEM.
@@ -11,20 +13,25 @@
 # 146.59.228.105 <- This returns Malicious AND Suspicious
 
 from redbot.core import commands, Config, checks, modlog
+from collections import deque
+import time
 import aiohttp
 import discord
-import requests
 import datetime
 import logging
 import base64 # Used by API to encode URL for submission
 import re
 import urllib.parse
-import uuid
 
-log = logging.getLogger("red.VirusTotal")
+log = logging.getLogger("red.Grommish-Cogs.VirusTotal")
+log.setLevel(logging.DEBUG)  # Enable Debug level entries to goto the log
+
+RATE_LIMIT = 4  # VirusTotal Free Tier: 4 requests per minute
+TIME_WINDOW = 60  # Time window in seconds (1 minute)
 
 class VirusTotal(commands.Cog):
     """Check links for malicious content using VirusTotal."""
+    # Set some static strings
 
     def __init__(self, bot):
         self.bot = bot
@@ -42,14 +49,39 @@ class VirusTotal(commands.Cog):
             "modlog_channel": None,
         }
         self.config.register_guild(**default_guild_settings)
-        log.info("VirusTotal link scanning has started.")
+        self.request_times = deque()  # Track timestamps of API requests
+        log.info("VirusTotal Cog has loaded.")
 
+    async def rate_limited(self, guild) -> bool:
+        """Check if the rate limit has been exceeded for a specific guild."""
+        debug = await self.config.guild(guild).debug()
+        now = time.time()
+
+        # Remove timestamps older than the time window
+        while self.request_times and self.request_times[0] < now - TIME_WINDOW:
+            self.request_times.popleft()
+
+        # Check if we're within the rate limit
+        if len(self.request_times) < RATE_LIMIT:
+            self.request_times.append(now)
+            if debug:
+                log.debug(f"Current Rate is: {len(self.request_times)}")
+            return False  # Not rate limited
+        return True  # Rate limited
+   
     # Use Standarized Calls to handle Secret Token/API
     async def get_api_key(self):
         # First, try to get the API key from shared API tokens
         shared_api_key = await self.bot.get_shared_api_tokens("virustotal")
         # Return api_key as the API token or None if it isn't set
         return shared_api_key.get("api_key", None)
+
+    async def ensure_api_key(ctx):
+        api = await ctx.bot.get_shared_api_tokens("virustotal")
+        if not api or not api.get("api_key"):
+            await ctx.send("VirusTotal API Missing.\n\nUse `[p]set api virustotal` and type `api_key <your_api_key>` in the popout box to set the API key")
+            return False
+        return True
 
     @commands.group(aliases=["vt"])
     @commands.guild_only()
@@ -63,14 +95,15 @@ class VirusTotal(commands.Cog):
     async def virustotal_toggle(self, ctx):
         """Toggle link checking."""
         enabled = await self.config.guild(ctx.guild).enabled()
-        api = await self.config.guild(ctx.guild).api_key()
 
-        if not api:
-            await ctx.send("VirusTotal API Missing.  Use `[p]set api virustotal api_key <api_key>` to set")
+        if not await self.ensure_api_key():
+            # No API key is set
             return
 
+        # Flip the current status
         await self.config.guild(ctx.guild).enabled.set(not enabled)
         await ctx.send(f"VirusTotal link checking is now {'enabled' if not enabled else 'disabled'}.")
+        log.info(f"VirusTotal link checking is now {'enabled' if not enabled else 'disabled'}.")
 
     @virustotal.command(name="reset")
     @checks.admin_or_permissions(manage_guild=True)
@@ -193,12 +226,13 @@ class VirusTotal(commands.Cog):
 
     async def get_status(self, guild):
         """Get the current status of the VirusTotal cog."""
-        debug = await self.config.guild(guild).debug()  # Debug Flag
         api_key = await self.bot.get_shared_api_tokens("virustotal")  # Use the built in API Token handler
+        debug = await self.config.guild(guild).debug()  # Debug Flag
         if debug:
             # !!SECURITY WARNING!!  This WILL display your API Token in plaintext in the logs
-            log.info(f"[DEBUG] get_shared_api_tokens: {api_key}") 
+            log.debug(f"get_shared_api_tokens: {api_key}") 
 
+        # Get Cog Status
         enabled = await self.config.guild(guild).enabled()
         excluded_roles = await self.config.guild(guild).excluded_roles()
         punishment = await self.config.guild(guild).punishment_action()
@@ -215,6 +249,7 @@ class VirusTotal(commands.Cog):
         threshold = await self.config.guild(guild).threshold()
         dmuser = await self.config.guild(guild).dmuser()
 
+        # Create the Embed that will be returned with the above status
         embed = discord.Embed(title="VirusTotal Status", color=discord.Color.blue())
         embed.add_field(name="Link checking", value="✅ Enabled" if enabled else "❌ Disabled", inline=False)
         embed.add_field(name="VirusTotal API key", value="✅ Set" if api_key.get("api_key") is not None else "❌ Not set", inline=False)
@@ -240,51 +275,12 @@ class VirusTotal(commands.Cog):
 
         return embed
 
-    async def check_link(self, message):
-        # Check the links asyncroniously
-        author = message.author
-        content = message.content
-
-        # Somehow got into on_message without being part of a/the guild
-        if not hasattr(author, "guild") or not author.guild:
-            return
-
-        # Set the guild the message arrived under
-        guild = author.guild
-
-        enabled = await self.config.guild(guild).enabled()
-        if not enabled:
-            return
-
-        debug = await self.config.guild(guild).debug()
-        if debug == True:
-            log.info(f"[DEBUG] Debug is {'Enabled' if debug else 'Disabled'}")
-
-        api_key = await self.config.guild(guild).api_key()
-
-        # Find all URLs, IPv4, and IPv6 addresses using regular expressions.  These begin with http:// or https:// only
-        # Modify the regular expression to match FQDNs only
-        urls = re.findall(r'https?://(?:[-\w]+\.)+[a-zA-Z]{2,}(?:/[-\w]+)*\.\w+', content)
-        ipv4_addresses = re.findall(r'(?:https?://(?:\d{1,3}\.){3}\d{1,3})', content)
-        ipv6_addresses = re.findall(r'(?:https?://)?(?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4}\b', content)
-
-        # Dedupe
-        urls = list(set(urls))
-        ipv4_addresses = list(set(ipv4_addresses))
-        ipv6_addresses = list(set(ipv6_addresses))
-
-        # Merge all addresses and URLs
-        all_addresses = urls + ipv4_addresses + ipv6_addresses
-
-        # If we found Addresses or IPs, check them async
-        if all_addresses:
-            await self.check_links_task(message, all_addresses)
-
     async def send_dm_to_user(self, member, embed):
         dmuser = await self.config.guild(member.guild).dmuser()
 
         # Is sending to DMs to user enabled?
         if not dmuser:
+            log.error("send_dm_to_user: No User?")
             return
         else:
             try:
@@ -298,6 +294,10 @@ class VirusTotal(commands.Cog):
         reports_channel_id = await self.config.guild(guild).report_channel()
         reports_channel = guild.get_channel(reports_channel_id)
 
+        if not reports_channel:
+            log.error("No Reports Channel has been defined!")
+            return
+        
         if reports_channel:
             try:
                 await reports_channel.send(embed=embed)
@@ -329,90 +329,96 @@ class VirusTotal(commands.Cog):
         # Send back the results
         return mal_sus, message_content # Title and Description
 
-    async def check_links_task(self, message, all_addresses):
+    async def check_links(self, message):
         """Async Task for Link checking"""
+        # Ignore messages from DMs or the bot itself
+        if not message.guild or message.author.bot:
+            return  # Ignore if message is not from a guild or the author is the bot
+
         author = message.author
         guild = author.guild
-        debug = await self.config.guild(guild).debug()
+        debug = await self.config.guild(guild).debug()  # Debug Flag
         threshold = await self.config.guild(guild).threshold()
-        content = message.content
+        api_key = await self.bot.get_shared_api_tokens("virustotal")
 
-        # Load up the API key
-        api_key = await self.config.guild(guild).api_key()
+        # Extract the API key
+        api_key_value = api_key.get("api_key", None)
+        if not api_key_value:
+            log.error("VirusTotal API key is missing!")
+            return  # Handle missing API key gracefully
 
+        headers = {"x-apikey": api_key_value}
+
+        # Improved regular expressions
+        url_regex = r'https?://(?:[a-zA-Z0-9\-]+\.)+[a-zA-Z]{2,}(?:[/?#][^\s]*)?'
+        ipv4_regex = r'\b(?:\d{1,3}\.){3}\d{1,3}\b'
+        ipv6_regex = r'\b(?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4}\b'
+
+        # Combine all address matches
+        urls = re.findall(url_regex, message.content)
+        ipv4_addresses = re.findall(ipv4_regex, message.content)
+        ipv6_addresses = re.findall(ipv6_regex, message.content)
+
+        all_addresses = set(urls + ipv4_addresses + ipv6_addresses)
+        # If all_addresses is empty, there is no point processing the rest.
+        if not all_addresses:
+            return
+
+        if await self.rate_limited(guild):
+            log.warning("API Rate limit exceeded! Skipping VirusTotal checks.")
+            return  # Skip API calls if rate limit is exceeded
+        
         if debug:
-            log.info(f"[DEBUG] All Addresses: {all_addresses}")
-        for address in all_addresses:
-            if debug:
-                log.info(f"[DEBUG] Found address: {address}")
+            log.debug(f"Addresses found: {all_addresses}")
 
-            headers = {
-                "x-apikey": api_key
-            }
+        async with aiohttp.ClientSession() as session:
+            for address in all_addresses:
+                log.debug(f"Checking address: {address}")
 
-            # Pull out the URL into its parts and grab just the hostname
-            parsed_address = urllib.parse.urlparse(address)
-            host_address = parsed_address.hostname
+                # Determine if the address is an IP or a URL
+                parsed_address = urllib.parse.urlparse(address)
+                host_address = parsed_address.hostname or address  # Use the hostname if URL, else the raw address
 
-            if debug:
-                log.info(f"[DEBUG] HOST ADDRESS: {host_address}")
-
-            # Check if the address is an IPv4 or IPv6 address
-            if re.match(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', host_address):
-                url = f"https://www.virustotal.com/api/v3/ip_addresses/{host_address}"
-                scan_type = "ip"
-            else:
-                url = f"https://www.virustotal.com/api/v3/urls/{base64.urlsafe_b64encode(address.encode()).decode().strip('=')}"
-                scan_type = "url"
-
-            response = requests.get(url, headers=headers)
-
-            if debug:
-                log.info(f"[DEBUG] ENCODED ID: {base64.urlsafe_b64encode(address.encode()).decode().strip('=')}")
-                log.info(f"[DEBUG] RESPONSE: {response}")
-
-
-            if response.status_code == 200:
-                json_response = response.json()
-                json_data = json_response.get("data", {})
-                json_attributes = json_data.get("attributes", {})
-                json_last_analysis_stats = json_attributes.get("last_analysis_stats", {})
-
-                if scan_type == "ip":
-                    link = str(json_response["data"]["id"])
+                if re.match(ipv4_regex, host_address) or re.match(ipv6_regex, host_address):
+                    url = f"https://www.virustotal.com/api/v3/ip_addresses/{host_address}"
+                    scan_type = "ip"
                 else:
-                    link = json_response["data"]["attributes"]["url"]
-
-                #malicious = json_last_analysis_stats.get("malicious", 0)
-                #suspicious = json_last_analysis_stats.get("suspicious", 0)
-
-                total_scanners = json_response["data"]["attributes"]["last_analysis_results"]
-
-                # Count the total number of vendors, ignoring Quttera
-                total_scanners_count = len([engine for engine in total_scanners if engine != "Quttera"])
-
-                # Extract the names of the engines that returned malicious or suspicious results, ignoring Quttera
-                malicious_engines = []
-                suspicious_engines = []
-
-                for engine, result in total_scanners.items():
-                    if engine == "Quttera":
-                        continue
-                    if result['category'] == 'malicious':
-                        malicious_engines.append(engine)
-                    elif result['category'] == 'suspicious':
-                        suspicious_engines.append(engine)
-
-                malicious = len(malicious_engines)
-                suspicious = len(suspicious_engines)
-                if malicious >= 1 or suspicious > threshold:
-                    await self.handle_bad_link(guild, message, malicious, suspicious, total_scanners_count, link, malicious_engines, suspicious_engines)
+                    encoded_url = base64.urlsafe_b64encode(address.encode()).decode().strip("=")
+                    url = f"https://www.virustotal.com/api/v3/urls/{encoded_url}"
+                    scan_type = "url"
 
                 if debug:
-                    log.info(f"[DEBUG] MALICIOUS: {malicious}")
-                    log.info(f"[DEBUG] SUSPICIOUS: {suspicious}")
-                    log.info(f"[DEBUG] MALICIOUS ENGINES: {malicious_engines}")
-                    log.info(f"[DEBUG] SUSPICIOUS ENGINES: {suspicious_engines}")
+                    log.debug(f"API URL: {url} (Type: {scan_type})")
+
+                # Perform the API request
+                async with session.get(url, headers=headers) as response:
+                    if response.status != 200:
+                        log.error(f"[ERROR] VirusTotal API request failed with status code {response.status}")
+                        continue
+
+                    json_response = await response.json()
+                    analysis_results = json_response.get("data", {}).get("attributes", {}).get("last_analysis_results", {})
+
+                    # Exclude Quttera engine  due to false positives, and calculate totals
+                    analysis_results.pop("Quttera", None)
+                    malicious_engines = [engine for engine, result in analysis_results.items() if result['category'] == 'malicious']
+                    suspicious_engines = [engine for engine, result in analysis_results.items() if result['category'] == 'suspicious']
+
+                    malicious = len(malicious_engines)
+                    suspicious = len(suspicious_engines)
+                    total_scanners = len(analysis_results)
+
+                    if debug:
+                        log.debug(f"Results: Malicious={malicious}, Suspicious={suspicious}, Scanners={total_scanners}")
+                        log.debug(f"Malicious Engines: {malicious_engines}")
+                        log.debug(f"Suspicious Engines: {suspicious_engines}")
+
+                    # Trigger handling logic if threshold is breached
+                    if malicious >= 1 or suspicious > threshold:
+                        link = address if scan_type == "ip" else json_response["data"]["attributes"].get("url", address)
+                        await self.handle_bad_link(
+                            guild, message, malicious, suspicious, total_scanners, link, malicious_engines, suspicious_engines
+                        )
 
     async def handle_bad_link(self, guild, message, num_malicious: int, num_suspicious: int, total_scanners: int, link, malicious_engines: list, suspicious_engines: list):
         member = message.author
@@ -425,7 +431,7 @@ class VirusTotal(commands.Cog):
         punishment_channel = guild.get_channel(int(punishment_channel_id)) if punishment_channel_id else None
 
         if debug:
-            log.info(f"[DEBUG] PUNISH: {punishment}")
+            log.debug(f"PUNISH: {punishment}")
 
         # Build out Embed Title and Description
         title, description = await self.determine_mal_sus(num_malicious, num_suspicious, total_scanners)
@@ -462,7 +468,7 @@ class VirusTotal(commands.Cog):
                 except RuntimeError:  # modlog channel isn't set
                     pass
                 except discord.Forbidden:
-                    log.info(
+                    log.warning(
                         "Modlog failed to edit the Discord message for"
                         " the case #%s from guild with ID due to missing permissions."
                     )
@@ -475,7 +481,7 @@ class VirusTotal(commands.Cog):
                 try:
                     await message.guild.ban(member, reason="Malicious link detected")
                 except discord.errors.Forbidden:
-                    log.error("Bot does not have proper permissions to ban the user")
+                    log.error(f"Bot does not have proper permissions to ban the user {member.name} ({member.id})")
 
             elif punishment == "punish":  # This is when it's set to Punish
                 embed.add_field(
@@ -487,7 +493,7 @@ class VirusTotal(commands.Cog):
 
                 # Modlog - Open the case
                 try:
-                    log.debug("Entering Punishment Modlog")
+                    log.info("Entering Punishment Modlog")
                     await modlog.create_case(
                         self.bot,
                         guild,
@@ -525,7 +531,7 @@ class VirusTotal(commands.Cog):
                         await member.add_roles(punishment_role)
 
                 except discord.errors.Forbidden:
-                    log.warning(f"Bot does not have permissions to manage roles for {member.name}.")
+                    log.warning(f"Bot does not have permissions to manage roles for {member.name} ({member.id}).")
                 except discord.errors.HTTPException:
                     log.warning(f"Managing roles for {member.name} failed.")
 
@@ -536,12 +542,12 @@ class VirusTotal(commands.Cog):
             except discord.errors.NotFound:
                 log.warning("Message not found or already deleted.")
             except discord.errors.Forbidden:
-                log.warning("Bot does not have proper permissions to delete the message")
+                log.warning(f"Bot does not have proper permissions to delete the message from {member.name} ({member.id})")
             except discord.errors.HTTPException:
                 log.warning("Deleting the message failed.")
 
         if debug:
-            log.info(f"[DEBUG] Link: {link}")
+            log.debug(f"Link: {link}")
 
         # Send to the Reports channel
         await self.send_dm_to_user(member, embed)
@@ -571,11 +577,11 @@ class VirusTotal(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
-        await self.check_link(message)
+        await self.check_links(message)
 
     @commands.Cog.listener()
     async def on_message_edit(self, before, after):
-        await self.check_link(after)
+        await self.check_links(after)
 
 def setup(bot):
     bot.add_cog(VirusTotal(bot))

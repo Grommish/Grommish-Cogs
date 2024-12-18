@@ -1,5 +1,6 @@
 {
     "author" : ["Donald Hoskins <gamingwithgeezers>"],
+    "end_user_data_statement" : "This Cog does not store user data.",
     "install_msg" : "Thank you for installing the VirusTotal Cog.\nVirusTotal Cog sends links to VirusTotal for scanning and requires a VirusTotal API Key",
     "name" : "VirusTotal",
     "short" : "VirusTotal Link Scanning for RedBot-Discord 3.x",
