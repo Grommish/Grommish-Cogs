@@ -464,19 +464,13 @@ class VirusTotal(commands.Cog):
                         action_type="ban"
                     )
 
-                    log.info(f"Modlog case created for banning user {member} due to malicious link.")
+                    log.info(f"Modlog case created for banning user {member.name} ({member.id}) due to malicious link.")
                 except RuntimeError:  # modlog channel isn't set
                     pass
                 except discord.Forbidden:
-                    log.warning(
-                        "Modlog failed to edit the Discord message for"
-                        " the case #%s from guild with ID due to missing permissions."
-                    )
-                except Exception:
-                    log.exception(
-                        "Modlog failed to send the Discord message for"
-                        " the case #%s from guild with ID %s due to unexpected error."
-                    )
+                    log.warning(f"Modlog failed regarding modlog case creation for {member.name} ({member.id}) due to missing permissions.")
+                except Exception as e:
+                    log.exception(f"Modlog failed to create case for {member.name} ({member.id}) due to an unexpected error: {e}.")
 
                 try:
                     await message.guild.ban(member, reason="Malicious link detected")
@@ -486,14 +480,15 @@ class VirusTotal(commands.Cog):
             elif punishment == "punish":  # This is when it's set to Punish
                 embed.add_field(
                     name="Alert!",
-                    value=f"You have sent a link that is considered malicious and have been disabled from sending further messages.\n"
-                        f"You can appeal this status in `{punishment_channel.name}` channel.",
+                    value=f"You have sent a link that is considered malicious and have been disabled from sending further messages.\nYou can appeal this status in `{punishment_channel.name}` channel.",
                     inline=False
                 )
 
                 # Modlog - Open the case
                 try:
-                    log.info("Entering Punishment Modlog")
+                    if debug:
+                        log.debug("Entering Punishment Modlog")
+
                     await modlog.create_case(
                         self.bot,
                         guild,
