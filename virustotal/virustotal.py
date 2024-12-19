@@ -227,27 +227,35 @@ class VirusTotal(commands.Cog):
     async def get_status(self, guild):
         """Get the current status of the VirusTotal cog."""
         api_key = await self.bot.get_shared_api_tokens("virustotal")  # Use the built in API Token handler
-        debug = await self.config.guild(guild).debug()  # Debug Flag
+
+        # Load the Guild configuration information
+        config = await self.config.guild(guild).all()
+
+        debug = config["debug"]
         if debug:
             # !!SECURITY WARNING!!  This WILL display your API Token in plaintext in the logs
             log.debug(f"get_shared_api_tokens: {api_key}") 
 
         # Get Cog Status
-        enabled = await self.config.guild(guild).enabled()
-        excluded_roles = await self.config.guild(guild).excluded_roles()
-        punishment = await self.config.guild(guild).punishment_action()
-        punishment_role_id = await self.config.guild(guild).punishment_role()
+        enabled = config["enabled"]
+        excluded_roles = config["excluded_roles"]
+        
+        punishment = config["punishment_action"]
+        punishment_role_id = config["punishment_role"]
         punishment_role = guild.get_role(punishment_role_id) if punishment_role_id else None
         punishment_channel_id = await self.config.guild(guild).punishment_channel()
         punishment_channel = guild.get_channel(punishment_channel_id) if punishment_channel_id else None
-        report_channel_id = await self.config.guild(guild).report_channel()
+        
+        report_channel_id = config["report_channel"]
         report_channel = guild.get_channel(report_channel_id) if report_channel_id else None
         report_channel_name = report_channel.name if report_channel else "Not set"
-        modlog_channel_id = await self.config.guild(guild).modlog_channel()  # New modlog channel configuration
+        
+        modlog_channel_id = config["modlog_channel"]  # New modlog channel configuration
         modlog_channel = guild.get_channel(modlog_channel_id) if modlog_channel_id else None  # Get modlog channel
         modlog_channel_name = modlog_channel.name if modlog_channel else "Not set"  # Determine modlog channel name
-        threshold = await self.config.guild(guild).threshold()
-        dmuser = await self.config.guild(guild).dmuser()
+        
+        threshold = config["threshold"]
+        dmuser = config["dmuser"]
 
         # Create the Embed that will be returned with the above status
         embed = discord.Embed(title="VirusTotal Status", color=discord.Color.blue())
@@ -337,8 +345,12 @@ class VirusTotal(commands.Cog):
 
         author = message.author
         guild = author.guild
-        debug = await self.config.guild(guild).debug()  # Debug Flag
-        threshold = await self.config.guild(guild).threshold()
+        
+        # Load the Guild configuration information
+        config = await self.config.guild(guild).all()
+        
+        debug = config["debug"]
+        threshold = config["threshold"]
         api_key = await self.bot.get_shared_api_tokens("virustotal")
 
         # Extract the API key
@@ -399,8 +411,11 @@ class VirusTotal(commands.Cog):
                     json_response = await response.json()
                     analysis_results = json_response.get("data", {}).get("attributes", {}).get("last_analysis_results", {})
 
-                    # Exclude Quttera engine  due to false positives, and calculate totals
+                    # Exclude Quttera engine due to false positives, and calculate totals
                     analysis_results.pop("Quttera", None)
+                    # Exclude CRDF, who returns 0.0.0.0 as Malicious
+                    analysis_results.pop("CRDF", None)
+
                     malicious_engines = [engine for engine, result in analysis_results.items() if result['category'] == 'malicious']
                     suspicious_engines = [engine for engine, result in analysis_results.items() if result['category'] == 'suspicious']
 
@@ -409,12 +424,13 @@ class VirusTotal(commands.Cog):
                     total_scanners = len(analysis_results)
 
                     if debug:
-                        log.debug(f"Results: Malicious={malicious}, Suspicious={suspicious}, Scanners={total_scanners}")
+                        log.debug(f"Results: Malicious={malicious}, Suspicious={suspicious}, Scanners={total_scanners}, Threshold={threshold}")
                         log.debug(f"Malicious Engines: {malicious_engines}")
                         log.debug(f"Suspicious Engines: {suspicious_engines}")
 
                     # Trigger handling logic if threshold is breached
-                    if malicious >= 1 or suspicious > threshold:
+                    if (malicious >= 1) or (suspicious >= threshold):
+
                         link = address if scan_type == "ip" else json_response["data"]["attributes"].get("url", address)
                         await self.handle_bad_link(
                             guild, message, malicious, suspicious, total_scanners, link, malicious_engines, suspicious_engines
@@ -422,12 +438,16 @@ class VirusTotal(commands.Cog):
 
     async def handle_bad_link(self, guild, message, num_malicious: int, num_suspicious: int, total_scanners: int, link, malicious_engines: list, suspicious_engines: list):
         member = message.author
-        debug = await self.config.guild(guild).debug()
+
+        # Load the Guild configuration information
+        config = await self.config.guild(guild).all()
+        debug = config["debug"]
 
         # Excluded Role IDs
-        excluded_roles = await self.config.guild(message.guild).excluded_roles()
-        punishment = await self.config.guild(message.guild).punishment_action()
-        punishment_channel_id = await self.config.guild(message.guild).punishment_channel()
+
+        excluded_roles = config["excluded_roles"]
+        punishment = config["punishment_action"]
+        punishment_channel_id = config["punishment_channel"]
         punishment_channel = guild.get_channel(int(punishment_channel_id)) if punishment_channel_id else None
 
         if debug:
@@ -578,5 +598,3 @@ class VirusTotal(commands.Cog):
     async def on_message_edit(self, before, after):
         await self.check_links(after)
 
-def setup(bot):
-    bot.add_cog(VirusTotal(bot))
